@@ -1,0 +1,78 @@
+# Cross-Asset Arbitrage Monitor Configuration
+
+# Market Settings
+markets:
+  indian:
+    enabled: true
+    instruments:
+      - NIFTY
+      - BANKNIFTY
+    options_expiry_types:
+      - weekly
+      - monthly
+  
+  us:
+    enabled: true
+    instruments:
+      - SPY  # S&P 500 ETF
+      - QQQ  # Nasdaq ETF
+
+# Arbitrage Detection Parameters
+arbitrage:
+  put_call_parity:
+    enabled: true
+    min_deviation_pct: 0.1  # Minimum 0.1% deviation to flag
+    
+  covered_interest_parity:
+    enabled: true
+    currency_pairs:
+      - USD/INR
+    min_deviation_bps: 10  # Minimum 10 basis points
+    
+  futures_basis:
+    enabled: true
+    min_basis_deviation_pct: 0.15
+    
+  box_spread:
+    enabled: true
+    min_profit_threshold: 0.05  # Rs 0.05 per unit
+
+# Transaction Costs (in %)
+transaction_costs:
+  indian_equity: 0.05
+  indian_options: 0.05
+  indian_futures: 0.02
+  us_options: 0.10
+  fx_spot: 0.02
+  fx_forward: 0.03
+
+# Risk-Free Rates Sources
+risk_free_rates:
+  india: "IN_91DAY_TBILL"  # 91-day T-Bill
+  us: "US_3MONTH_TBILL"
+
+# Data Settings
+data:
+  update_frequency_seconds: 60  # Real-time update interval
+  historical_years: 5
+  cache_enabled: true
+  cache_expiry_minutes: 5
+
+# Database
+database:
+  path: "data/arbitrage_opportunities.db"
+  backup_enabled: true
+
+# Logging
+logging:
+  level: "INFO"
+  file: "logs/arbitrage_monitor.log"
+  rotation: "1 day"
+  retention: "30 days"
+
+# Dashboard
+dashboard:
+  title: "Cross-Asset Arbitrage Monitor"
+  theme: "light"
+  refresh_interval_seconds: 30
+  max_opportunities_display: 50
