@@ -9,6 +9,9 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 import time
 import random
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # Import with error handling
 try:
@@ -40,7 +43,8 @@ class NSEDataFetcher:
         'BANKNIFTY': '^NSEBANK'
     }
     
-    def __init__(self, cache_duration_seconds: int = 60):
+    
+    def __init__(self, cache_duration_seconds: int = 60, allow_dummy: bool = False):
         """
         Initialize fetcher with caching
         
@@ -50,7 +54,91 @@ class NSEDataFetcher:
         self.cache_duration = cache_duration_seconds
         self.cache = {}
         self.last_fetch_time = {}
+        self.allow_dummy = allow_dummy
+        self._session = None
         log.info("NSEDataFetcher initialized")
+
+    def _nse_session(self) -> requests.Session:
+        """Create a robust NSE session with headers + retries + cookies."""
+        if self._session is not None:
+            return self._session    
+        s = requests.Session()
+        retry = Retry(
+            total=3,
+            backoff_factor=0.7,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=("GET",)
+        )
+        s.mount("https://", HTTPAdapter(max_retries=retry))
+        s.headers.update({
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Accept": "application/json,text/plain,*/*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://www.nseindia.com/option-chain",
+    "Origin": "https://www.nseindia.com",
+    "Connection": "keep-alive",
+    "DNT": "1",
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-origin",
+        })
+        # set cookies
+        try:
+            s.get("https://www.nseindia.com", timeout=15)
+        except Exception:
+            pass
+
+        self._session = s
+        return self._session
+
+    def _nse_get_json(self, url: str, params: Optional[dict] = None) -> Optional[dict]:
+        s = self._nse_session()
+
+        # Refresh cookies once if needed
+        if "nseappid" not in s.cookies.get_dict():
+            try:
+                s.get("https://www.nseindia.com", timeout=10)
+            except Exception:
+                pass
+
+        try:
+            r = s.get(url, params=params, timeout=20)
+
+            ct = (r.headers.get("Content-Type") or "").lower()
+            log.info(f"[NSE] GET {r.url} -> {r.status_code} | ct={ct}")
+
+            # Log a short snippet ALWAYS (super useful for Cloudflare/HTML blocks)
+            try:
+                snippet = (r.text or "")[:200].replace("\n", " ")
+                log.info(f"[NSE] snippet: {snippet}")
+            except Exception:
+                pass
+
+            if r.status_code != 200:
+                return None
+
+            # If NSE returns HTML with 200, JSON parsing will fail -> catch below
+            return r.json()
+
+        except Exception as e:
+            log.exception(f"[NSE] Exception for {url} params={params}: {e}")
+            return None
+
+        
+    def _prime_option_chain(self) -> None:
+        """Hit option-chain page to set additional cookies NSE expects."""
+        """Prime NSE cookies/headers for option chain endpoints."""
+        try:
+            s = self._nse_session()
+            s.get("https://www.nseindia.com", timeout=10)
+            s.get("https://www.nseindia.com/option-chain", timeout=10)
+            # sometimes this helps set additional cookies used by api calls
+            # s.get("https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY", timeout=10)
+        except Exception:
+            pass
+       
+
     
     def get_spot_price(self, symbol: str) -> Optional[float]:
         """
@@ -70,6 +158,7 @@ class NSEDataFetcher:
         
         spot_price = None
         
+        '''
         # Method 1: nsepython
         if nse_eq is not None:
             try:
@@ -85,23 +174,71 @@ class NSEDataFetcher:
                     log.info(f"Fetched {symbol} spot via nsepython: {spot_price}")
             except Exception as e:
                 log.warning(f"nsepython failed: {e}")
+                '''
+        # Method 1: NSE Index API (robust for indices; avoids nse_eq misuse)
+        try:
+            index_map = {
+                "NIFTY": "NIFTY 50",
+                "BANKNIFTY": "NIFTY BANK",
+                "FINNIFTY": "NIFTY FIN SERVICE"
+            }
+            idx_name = index_map.get(symbol, symbol)
+            j = self._nse_get_json(
+                "https://www.nseindia.com/api/equity-stockIndices",
+                params={"index": idx_name}
+            )
+            if j == {}:
+                log.warning("[OC] option-chain-indices returned empty JSON {}. Resetting session + retrying once...")
+                self._session = None  # force a fresh cookie jar
+                self._prime_option_chain()
+                j = self._nse_get_json(
+                    "https://www.nseindia.com/api/option-chain-indices",
+                    params={"symbol": symbol}
+                )
+
+            if j and "data" in j and len(j["data"]) > 0:
+                row0 = j["data"][0]
+                # NSE sometimes uses 'last' field for index quotes
+                spot_price = float(row0.get("last", row0.get("lastPrice", 0)))
+                if spot_price > 0:
+                    log.info(f"Fetched {symbol} spot via NSE index API: {spot_price}")
+        except Exception as e:
+            log.warning(f"NSE index API failed: {e}")
         
-        # Method 2: yfinance
+        
+        # Method 2: yfinance (fallback; may be delayed/close)
         if spot_price is None and yf is not None and symbol in self.YF_SYMBOLS:
             try:
                 ticker = yf.Ticker(self.YF_SYMBOLS[symbol])
-                hist = ticker.history(period='1d')
+                '''hist = ticker.history(period='1d')
                 if not hist.empty:
                     spot_price = float(hist['Close'].iloc[-1])
+                    log.info(f"Fetched {symbol} spot via yfinance: {spot_price}")'''
+                # Try intraday first
+                hist = ticker.history(period="1d", interval="1m")
+                if not hist.empty:
+                    spot_price = float(hist["Close"].iloc[-1])
+                else:
+                    hist = ticker.history(period="5d")
+                    if not hist.empty:
+                        spot_price = float(hist["Close"].iloc[-1])
+                if spot_price is not None:
                     log.info(f"Fetched {symbol} spot via yfinance: {spot_price}")
             except Exception as e:
                 log.warning(f"yfinance failed: {e}")
         
-        # Method 3: Fallback
+        # Method 3: Explicit dummy/fallback only (never silently in live mode)
         if spot_price is None:
-            fallback = {'NIFTY': 22000.0, 'BANKNIFTY': 47000.0, 'FINNIFTY': 20000.0}
-            spot_price = fallback.get(symbol)
-            log.warning(f"Using fallback for {symbol}: {spot_price}")
+            if self.allow_dummy:
+                fallback = {'NIFTY': 22000.0, 'BANKNIFTY': 47000.0, 'FINNIFTY': 20000.0}
+                spot_price = fallback.get(symbol)
+                log.warning(f"Using fallback for {symbol}: {spot_price}")
+            else:
+                log.error(f"Spot fetch failed for {symbol} (dummy disabled).")
+                return None
+            # fallback = {'NIFTY': 22000.0, 'BANKNIFTY': 47000.0, 'FINNIFTY': 20000.0}
+            # spot_price = fallback.get(symbol)
+            # log.warning(f"Using fallback for {symbol}: {spot_price}")
         
         # Cache
         if spot_price is not None:
@@ -124,17 +261,84 @@ class NSEDataFetcher:
             log.debug(f"Using cached options chain")
             return self.cache[cache_key]
         
-        if nse_optionchain_scrapper is None:
+        #if nse_optionchain_scrapper is None:
+         #   spot = self.get_spot_price(symbol)
+          #  return self._generate_dummy_options_chain(symbol, spot)
+
+        # Prefer NSE official endpoint (more reliable than scrapper)
+        data = None
+
+        log.info(f"[OC] Fetching option chain for {symbol} expiry={expiry_date} (allow_dummy={self.allow_dummy})")
+
+        try:
+            self._prime_option_chain()
+            log.info("[OC] Priming done. Calling option-chain-indices API...")
+            j = self._nse_get_json(
+                "https://www.nseindia.com/api/option-chain-indices",
+                params={"symbol": symbol}
+            )
+            log.info(f"[OC] option-chain-indices returned: {'OK' if j else 'None'}")
+
+            if j and "records" in j and "data" in j["records"]:
+                data = j
+                try:
+                    underlying = float(data["records"]["underlyingValue"])
+                    self._update_cache(f"underlying_{symbol}", underlying)
+                    log.info(f"[OC] underlyingValue={underlying}")
+                except Exception:
+                    log.warning("[OC] Could not parse underlyingValue")
+
+        except Exception as e:
+            log.exception(f"[OC] Exception while fetching option-chain-indices: {e}")
+            data = None
+
+        # Fallback to nsepython scrapper if needed
+        if data is None and nse_optionchain_scrapper is not None:
+            try:
+                data = nse_optionchain_scrapper(symbol)
+                try:
+                    underlying = float(data["records"]["underlyingValue"])
+                    self._update_cache(f"underlying_{symbol}", underlying)
+                except Exception:
+                    pass
+            except Exception as e:
+                log.warning(f"nse_optionchain_scrapper failed: {e}")
+
+        # Fallback: try derivatives quote endpoint (sometimes less blocked)
+        if data is None:
+            try:
+                self._prime_option_chain()
+                q = self._nse_get_json(
+                    "https://www.nseindia.com/api/quote-derivative",
+                    params={"symbol": symbol}
+                )
+                # This endpoint structure differs; if present, you can at least detect failure reason
+                if q:
+                    log.warning("quote-derivative returned data but not parsed into chain yet.")
+            except Exception:
+                pass
+
+
+        # If no live data, dummy only if enabled
+        if data is None:
+            if not self.allow_dummy:
+                log.error("Options chain unavailable (dummy disabled).")
+                return None
             spot = self.get_spot_price(symbol)
             return self._generate_dummy_options_chain(symbol, spot)
 
         
         
         try:
-            log.info(f"Fetching options chain for {symbol}")
-            data = nse_optionchain_scrapper(symbol)
+            # log.info(f"Fetching options chain for {symbol}")
+            # data = nse_optionchain_scrapper(symbol)
+            
+            # if data is None or 'records' not in data:
+             #   return self._generate_dummy_options_chain(symbol)
             
             if data is None or 'records' not in data:
+                if not self.allow_dummy:
+                    return None
                 return self._generate_dummy_options_chain(symbol)
             
             records = data['records']['data']
@@ -201,17 +405,32 @@ class NSEDataFetcher:
         
         Returns list of dictionaries, each ready for PutCallParityMonitor.check_arbitrage()
         """
-        spot = self.get_spot_price(symbol)
+        # spot = self.get_spot_price(symbol)
+        # Prefer option-chain underlying (most consistent for PCP/ATM filtering)
+        spot = None
+       # Fetch chain first so underlying cache can populate
+        options_chain = self.get_options_chain(symbol, expiry_date)
+        if options_chain is None:
+            log.error("Options chain is None")
+            return []
+
+        if self._is_cache_valid(f"underlying_{symbol}"):
+            spot = self.cache.get(f"underlying_{symbol}")
+
+        if spot is None:
+            spot = self.get_spot_price(symbol)
         if spot is None:
             log.error("Spot price is None, cannot proceed")
             return []
         
         log.info(f"Spot price for arbitrage filtering: {spot}")
         
-        options_chain = self.get_options_chain(symbol, expiry_date)
+        '''options_chain = self.get_options_chain(symbol, expiry_date)
         if options_chain is None:
             log.error("Options chain is None")
             return []
+            '''
+        
         
         if options_chain.empty:
             log.error("Options chain is empty")
@@ -250,8 +469,12 @@ class NSEDataFetcher:
             
             # Calculate time to expiry
             try:
+                # expiry_dt = datetime.strptime(row['expiry_date'], '%d-%b-%Y')
+                # time_to_expiry = (expiry_dt - datetime.now()).days / 365.0
+
                 expiry_dt = datetime.strptime(row['expiry_date'], '%d-%b-%Y')
-                time_to_expiry = (expiry_dt - datetime.now()).days / 365.0
+                delta_sec = (expiry_dt - datetime.now()).total_seconds()
+                time_to_expiry = max(delta_sec, 0) / (365.0 * 24 * 3600)
                 
                 if time_to_expiry <= 0:
                     log.debug(f"Skipping expired option at strike {row['strike']}")
@@ -262,6 +485,14 @@ class NSEDataFetcher:
                 time_to_expiry = 21 / 365.0  # Default to 3 weeks
             
             log.info(f"Time to expiry calculated: {time_to_expiry} years")
+
+            # Pull a sensible risk-free rate instead of hardcoding
+            try:
+                from src.data_acquisition.risk_free_rates import RiskFreeRateFetcher
+                rate_fetcher = RiskFreeRateFetcher()
+                rfr = rate_fetcher.get_rate_for_options(time_to_expiry, 'NSE')
+            except Exception:
+                rfr = 0.07
             
             # Build arbitrage-ready dictionary
             arb_dict = {
@@ -270,7 +501,8 @@ class NSEDataFetcher:
                 'call_price': (row['call_bid'] + row['call_ask']) / 2 if pd.notna(row['call_bid']) and pd.notna(row['call_ask']) else row['call_price'],
                 'put_price': (row['put_bid'] + row['put_ask']) / 2 if pd.notna(row['put_bid']) and pd.notna(row['put_ask']) else row['put_price'],
                 'time_to_expiry': time_to_expiry,
-                'risk_free_rate': 0.07,
+                # 'risk_free_rate': 0.07,
+                'risk_free_rate': rfr,
                 'dividend_yield': 0.0,
                 'market': 'NSE',
                 'instrument': symbol,

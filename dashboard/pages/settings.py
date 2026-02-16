@@ -8,6 +8,21 @@ from pathlib import Path
 
 st.set_page_config(page_title="Settings", page_icon="⚙️", layout="wide")
 
+def _ensure_defaults():
+    st.session_state.setdefault("equity_cost_pct", 0.05)
+    st.session_state.setdefault("options_cost_pct", 0.05)
+    st.session_state.setdefault("futures_cost_pct", 0.02)
+    st.session_state.setdefault("pcp_min_profit", 5.0)
+    st.session_state.setdefault("pcp_min_dev", 0.10)
+    st.session_state.setdefault("fb_min_profit", 5.0)
+    st.session_state.setdefault("fb_min_dev", 0.05)
+    st.session_state.setdefault("cip_min_profit", 100.0)
+    st.session_state.setdefault("cip_min_dev", 0.10)
+    st.session_state.setdefault("cache_duration", 60)
+    st.session_state.setdefault("allow_dummy", False)
+
+_ensure_defaults()
+
 st.title("⚙️ Settings & Configuration")
 st.markdown("Configure arbitrage detection parameters and transaction costs")
 st.markdown("---")
@@ -22,7 +37,8 @@ with col1:
         "Equity Trading (%)",
         min_value=0.0,
         max_value=1.0,
-        value=0.05,
+        # value=0.05,
+        value=float(st.session_state["equity_cost_pct"]),
         step=0.01,
         format="%.3f",
         help="Transaction cost for equity trades"
@@ -33,7 +49,8 @@ with col2:
         "Options Trading (%)",
         min_value=0.0,
         max_value=1.0,
-        value=0.05,
+        # value=0.05,
+        value=float(st.session_state["options_cost_pct"]),
         step=0.01,
         format="%.3f",
         help="Transaction cost for option trades"
@@ -44,11 +61,16 @@ with col3:
         "Futures Trading (%)",
         min_value=0.0,
         max_value=1.0,
-        value=0.02,
+        # value=0.02,
+        value=float(st.session_state["futures_cost_pct"]),
         step=0.01,
         format="%.3f",
         help="Transaction cost for futures trades"
     )
+
+st.session_state["equity_cost_pct"] = float(equity_cost)
+st.session_state["options_cost_pct"] = float(options_cost)
+st.session_state["futures_cost_pct"] = float(futures_cost)
 
 st.markdown("---")
 
@@ -59,13 +81,23 @@ col1, col2 = st.columns(2)
 
 with col1:
     st.markdown("**Put-Call Parity**")
-    pcp_min_profit = st.number_input("Minimum Profit (₹)", value=5.0, step=1.0, key="pcp_profit")
-    pcp_min_deviation = st.slider("Minimum Deviation (%)", 0.01, 1.0, 0.1, 0.01, key="pcp_dev")
+    # pcp_min_profit = st.number_input("Minimum Profit (₹)", value=5.0, step=1.0, key="pcp_profit")
+    # pcp_min_deviation = st.slider("Minimum Deviation (%)", 0.01, 1.0, 0.1, 0.01, key="pcp_dev")
+    pcp_min_profit = st.number_input("Minimum Profit (₹)", value=float(st.session_state["pcp_min_profit"]), step=1.0, key="pcp_profit")
+    pcp_min_deviation = st.slider("Minimum Deviation (%)", 0.01, 1.0, float(st.session_state["pcp_min_dev"]), 0.01, key="pcp_dev")
 
 with col2:
     st.markdown("**Futures Basis**")
-    fb_min_profit = st.number_input("Minimum Profit (₹)", value=5.0, step=1.0, key="fb_profit")
-    fb_min_deviation = st.slider("Minimum Basis Deviation (%)", 0.01, 1.0, 0.05, 0.01, key="fb_dev")
+    # fb_min_profit = st.number_input("Minimum Profit (₹)", value=5.0, step=1.0, key="fb_profit")
+    # fb_min_deviation = st.slider("Minimum Basis Deviation (%)", 0.01, 1.0, 0.05, 0.01, key="fb_dev")
+    fb_min_profit = st.number_input("Minimum Profit (₹)", value=float(st.session_state["fb_min_profit"]), step=1.0, key="fb_profit")
+    fb_min_deviation = st.slider("Minimum Basis Deviation (%)", 0.01, 1.0, float(st.session_state["fb_min_dev"]), 0.01, key="fb_dev")
+
+st.session_state["pcp_min_profit"] = float(pcp_min_profit)
+st.session_state["pcp_min_dev"] = float(pcp_min_deviation)
+st.session_state["fb_min_profit"] = float(fb_min_profit)
+st.session_state["fb_min_dev"] = float(fb_min_deviation)
+ 
 
 st.markdown("---")
 
@@ -83,10 +115,14 @@ cache_duration = st.slider(
     "Cache Duration (seconds)",
     min_value=10,
     max_value=300,
-    value=60,
+    # value=60,
+    value=int(st.session_state["cache_duration"]),
     step=10,
     help="How long to cache market data before refreshing"
 )
+
+st.session_state["cache_duration"] = int(cache_duration)
+st.session_state["allow_dummy"] = (data_source == "Dummy Data (Testing)")
 
 st.markdown("---")
 

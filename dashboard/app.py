@@ -69,10 +69,41 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
+def _ensure_defaults():
+    # Costs are entered as % in UI, converted to decimals for engine.
+    st.session_state.setdefault("equity_cost_pct", 0.05)
+    st.session_state.setdefault("options_cost_pct", 0.05)
+    st.session_state.setdefault("futures_cost_pct", 0.02)
+    st.session_state.setdefault("pcp_min_profit", 5.0)
+    st.session_state.setdefault("pcp_min_dev", 0.10)
+    st.session_state.setdefault("fb_min_profit", 5.0)
+    st.session_state.setdefault("fb_min_dev", 0.05)
+    st.session_state.setdefault("cip_min_profit", 100.0)
+    st.session_state.setdefault("cip_min_dev", 0.10)
+    st.session_state.setdefault("cache_duration", 60)
+    st.session_state.setdefault("allow_dummy", False)
+
+def _txn_costs():
+    return {
+        "equity": st.session_state["equity_cost_pct"] / 100.0,
+        "options": st.session_state["options_cost_pct"] / 100.0,
+        "futures": st.session_state["futures_cost_pct"] / 100.0,
+        "fx_spot": 0.0005,
+        "fx_forward": 0.0005,
+        "borrowing_spread": 0.001,
+    }
+
+_ensure_defaults()
+
+
 @st.cache_data(ttl=60)
 def fetch_all_market_data(symbol='NIFTY', currency_pair='USDINR'):
     """Fetch all market data with caching"""
-    fetcher = NSEDataFetcher(cache_duration_seconds=60)
+    # fetcher = NSEDataFetcher(cache_duration_seconds=60)
+    fetcher = NSEDataFetcher(
+        cache_duration_seconds=int(st.session_state.get("cache_duration", 60)),
+        allow_dummy=bool(st.session_state.get("allow_dummy", False))
+    )
     
     # Get spot price
     spot = fetcher.get_spot_price(symbol)
@@ -96,6 +127,7 @@ def fetch_all_market_data(symbol='NIFTY', currency_pair='USDINR'):
 @st.cache_resource
 def get_arbitrage_monitors():
     """Create all arbitrage monitor instances"""
+    '''
     transaction_costs = {
         'equity': 0.0005,
         'options': 0.0005,
@@ -104,23 +136,34 @@ def get_arbitrage_monitors():
         'fx_forward': 0.0005,
         'borrowing_spread': 0.001
     }
+    '''
+    transaction_costs = _txn_costs()
     
     pcp_monitor = PutCallParityMonitor(
         transaction_costs=transaction_costs,
-        min_profit_threshold=5.0,
-        min_deviation_pct=0.05
+        # min_profit_threshold=5.0,
+        # min_deviation_pct=0.05
+
+        min_profit_threshold=float(st.session_state.get("pcp_min_profit", 5.0)),
+        min_deviation_pct=float(st.session_state.get("pcp_min_dev", 0.10))
     )
     
     futures_monitor = FuturesBasisMonitor(
         transaction_costs=transaction_costs,
-        min_profit_threshold=5.0,
-        min_basis_deviation_pct=0.05
+        # min_profit_threshold=5.0,
+        # min_basis_deviation_pct=0.05
+
+        min_profit_threshold=float(st.session_state.get("fb_min_profit", 5.0)),
+        min_basis_deviation_pct=float(st.session_state.get("fb_min_dev", 0.05))
     )
     
     cip_monitor = CoveredInterestParityMonitor(
         transaction_costs=transaction_costs,
-        min_profit_threshold=100.0,
-        min_deviation_pct=0.1
+        # min_profit_threshold=100.0,
+        # min_deviation_pct=0.1
+
+        min_profit_threshold=float(st.session_state.get("cip_min_profit", 100.0)),
+        min_deviation_pct=float(st.session_state.get("cip_min_dev", 0.10))
     )
     
     return pcp_monitor, futures_monitor, cip_monitor
@@ -228,6 +271,10 @@ def display_opportunity_card(opp, index, monitor_type):
                         f"{opp.metadata['time_period_days']:.0f} days"
                     ]
                 })
+
+            details_df = details_df.astype(str)
+            
+
             
             st.dataframe(details_df, use_container_width=True, hide_index=True)
             
@@ -265,6 +312,7 @@ def display_opportunity_card(opp, index, monitor_type):
                 })
             
             positions_df = pd.DataFrame(positions_data)
+            positions_df = positions_df.astype(str)
             st.dataframe(positions_df, use_container_width=True, hide_index=True)
 
 
@@ -526,6 +574,8 @@ def main():
                             f"₹{max_profit:.2f}"
                         ]
                     })
+                    summary_df["Value"] = summary_df["Value"].astype(str)
+
                     st.dataframe(summary_df, use_container_width=True, hide_index=True)
                 
                 with col2:

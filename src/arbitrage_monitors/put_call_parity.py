@@ -69,6 +69,7 @@ class PutCallParityMonitor(BaseArbitrageMonitor):
         T = market_data['time_to_expiry']
         r = market_data['risk_free_rate']
         q = market_data.get('dividend_yield', 0)
+        F = market_data.get('futures_price', None)
         
         market = market_data.get('market', 'Unknown')
         instrument = market_data.get('instrument', 'Unknown')
@@ -84,10 +85,20 @@ class PutCallParityMonitor(BaseArbitrageMonitor):
         
         # Calculate put-call parity components
         parity_lhs = C_market - P_market  # Left-hand side
-        parity_rhs = S * np.exp(-q * T) - K * np.exp(-r * T)  # Right-hand side
+        # parity_rhs = S * np.exp(-q * T) - K * np.exp(-r * T)  # Right-hand side
+        # Right-hand side:
+        # If futures price is provided, use futures-based parity (more appropriate for index options).
+        # C - P ≈ e^{-rT}(F - K)
+        if F is not None:
+            parity_rhs = np.exp(-r * T) * (float(F) - K)
+        else:
+            parity_rhs = S * np.exp(-q * T) - K * np.exp(-r * T)
         
         deviation = parity_lhs - parity_rhs
-        deviation_pct = abs(deviation) / C_market * 100  # As % of call price
+        # deviation_pct = abs(deviation) / C_market * 100  # As % of call price
+        # Safer scaling than dividing by C (C can be tiny for OTM calls)
+        scale = max(abs(parity_rhs), 1.0)
+        deviation_pct = abs(deviation) / scale * 100
         
         # Check if deviation exceeds minimum threshold
         if deviation_pct < self.min_deviation_pct:

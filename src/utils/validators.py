@@ -79,7 +79,8 @@ class DataValidator:
         
         # For in-the-money calls
         intrinsic_call = max(spot - strike, 0)
-        if call_price < intrinsic_call * 0.95:  # Allow 5% slack for spreads
+        #if call_price < intrinsic_call * 0.95:  # Allow 5% slack for spreads
+        if call_price + 1e-9 < intrinsic_call * 0.80:  # Allow wider slack for wide spreads / stale lastPrice
             return False, f"Call price {call_price} below intrinsic {intrinsic_call}"
         
         # No-arbitrage bounds for put option: K - S <= P <= K
@@ -88,7 +89,8 @@ class DataValidator:
         
         # For in-the-money puts
         intrinsic_put = max(strike - spot, 0)
-        if put_price < intrinsic_put * 0.95:
+        # if put_price < intrinsic_put * 0.95:
+        if put_price + 1e-9 < intrinsic_put * 0.80:
             return False, f"Put price {put_price} below intrinsic {intrinsic_put}"
         
         return True, "Valid"
