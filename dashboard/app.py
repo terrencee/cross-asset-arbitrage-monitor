@@ -81,7 +81,7 @@ def _ensure_defaults():
     st.session_state.setdefault("cip_min_profit", 100.0)
     st.session_state.setdefault("cip_min_dev", 0.10)
     st.session_state.setdefault("cache_duration", 60)
-    st.session_state.setdefault("allow_dummy", False)
+    st.session_state.setdefault("allow_dummy", True)  # Allow dummy data by default for testing till we get proper api to fetch real option data
 
 def _txn_costs():
     return {

@@ -439,19 +439,63 @@ class NSEDataFetcher:
         log.info(f"Options chain retrieved: {len(options_chain)} rows")
         log.info(f"Options chain columns: {list(options_chain.columns)}")
         log.info(f"Sample strikes: {list(options_chain['strike'].head())}")
+
+        # Filter for liquid strikes (within 10% of forward, not spot)
+        # Choose a reference expiry (nearest expiry in chain if not provided)
+        ref_expiry = expiry_date
+        if ref_expiry is None:
+            # pick the nearest (earliest) expiry present in the chain
+            expiries = sorted(options_chain["expiry_date"].dropna().unique().tolist())
+            if expiries:
+                ref_expiry = expiries[0]
+
+        # Compute a reference T for forward centering
+        T_ref = None
+        try:
+            if ref_expiry:
+                ref_dt = datetime.strptime(ref_expiry, "%d-%b-%Y")
+                delta_sec = (ref_dt - datetime.now()).total_seconds()
+                T_ref = max(delta_sec, 0) / (365.0 * 24 * 3600)
+        except Exception:
+            T_ref = None
+
+        if T_ref is None or T_ref <= 0:
+            # fallback (about 2–3 weeks)
+            T_ref = 21 / 365.0
+
+        # Pull a sensible risk-free rate for this maturity
+        try:
+            from src.data_acquisition.risk_free_rates import RiskFreeRateFetcher
+            rate_fetcher = RiskFreeRateFetcher()
+            r_ref = rate_fetcher.get_rate_for_options(T_ref, "NSE")
+        except Exception:
+            r_ref = 0.07
+
+        q_ref = 0.0  # you can later improve this using implied carry from futures if you add live futures
+        forward_ref = spot * np.exp((r_ref - q_ref) * T_ref)
+
+        log.info(f"Forward reference for strike filtering: F={forward_ref:.2f} (Spot={spot:.2f}, r={r_ref:.4f}, T={T_ref:.4f})")
+
+        lower_bound = forward_ref * 0.90
+        upper_bound = forward_ref * 1.10
+
+        log.info(f"Filtering strikes between {lower_bound:.2f} and {upper_bound:.2f} (±10% of forward)")
         
+        '''
         # Filter for liquid strikes (within 10% of spot)
         lower_bound = spot * 0.90
         upper_bound = spot * 1.10
         
         log.info(f"Filtering strikes between {lower_bound:.2f} and {upper_bound:.2f}")
+        '''
         
         liquid_options = options_chain[
             (options_chain['strike'] >= lower_bound) & 
             (options_chain['strike'] <= upper_bound)
         ]
         
-        log.info(f"Filtering {len(options_chain)} strikes to {len(liquid_options)} liquid strikes (within 10% of spot)")
+        log.info(
+            f"Filtering {len(options_chain)} strikes to {len(liquid_options)} liquid strikes (within 10% of the forward)")
         
         if liquid_options.empty:
             log.error("No liquid options after filtering!")
@@ -493,6 +537,9 @@ class NSEDataFetcher:
                 rfr = rate_fetcher.get_rate_for_options(time_to_expiry, 'NSE')
             except Exception:
                 rfr = 0.07
+
+            # Forward proxy for parity (ATM-forward). PutCallParityMonitor uses futures_price if provided.
+            forward_price = spot * np.exp((rfr - 0.0) * time_to_expiry)
             
             # Build arbitrage-ready dictionary
             arb_dict = {
@@ -510,10 +557,12 @@ class NSEDataFetcher:
                 'call_bid': row['call_bid'],
                 'call_ask': row['call_ask'],
                 'put_bid': row['put_bid'],
-                'put_ask': row['put_ask']
+                'put_ask': row['put_ask'],
+                'forward_price': forward_price,  # Add forward price for PCP
+                'futures_price': forward_price,  # Use forward as proxy for futures in PCP
             }
             
-            log.info(f"Built arb_dict: Call={arb_dict['call_price']:.2f}, Put={arb_dict['put_price']:.2f}")
+            log.info(f"Built arb_dict: Call={arb_dict['call_price']:.2f}, Put={arb_dict['put_price']:.2f}, F={arb_dict['futures_price']:.2f}")
             
             # Validate
             is_valid, error_msg = DataValidator.validate_option_data(

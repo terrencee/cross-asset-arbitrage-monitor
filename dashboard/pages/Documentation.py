@@ -32,7 +32,7 @@ options and futures markets by checking fundamental parity relationships.
 - ✅ Detailed execution steps for each opportunity
 - ✅ Professional analytics and visualization
 
-**Developed by:** Adhiraj | **Institution:** IIT Roorkee | **Course:** Financial Engineering
+**Developed by:** Adhiraj and Team | **Institution:** IIT Roorkee | **Course:** Financial Engineering
 """)
 
 st.markdown("---")
