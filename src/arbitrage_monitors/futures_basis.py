@@ -178,7 +178,11 @@ class FuturesBasisMonitor(BaseArbitrageMonitor):
         profit_pct = (net_profit / capital_employed) * 100
         
         # Annualized return
-        annualized_return = (net_profit / capital_employed) * (365.0 / (T * 365)) * 100
+        # T is time to expiry in years
+        if T is None or T <= 0:
+            annualized_return = 0.0
+        else:
+            annualized_return = (net_profit / capital_employed) * (1.0 / (T)) * 100
         
         # Execution steps
         execution_steps = [
