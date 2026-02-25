@@ -673,7 +673,9 @@ class NSEDataFetcher:
         last_thursday = last_day - timedelta(days=days_to_thursday)
         
         # Calculate time to expiry
-        time_to_expiry = (last_thursday - today).days / 365.0
+        # time_to_expiry = (last_thursday - today).days / 365.0
+        delta_sec = (last_thursday - today).total_seconds()
+        time_to_expiry = max(delta_sec, 0) / (365.0 * 24 * 3600)
         
         # Calculate fair futures (with slight premium for dummy data)
         r = 0.07  # Risk-free rate
